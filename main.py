@@ -3,12 +3,13 @@ import html
 import json
 import os
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -46,7 +47,7 @@ OPEN_LOCATION_TERMS = (
 
 HEADERS = {
     "User-Agent": "AndroidJobScout/1.0 (+https://github.com/MohamedMosad0/Jobs)",
-    "Accept": "application/json, application/rss+xml, application/xml, text/xml",
+    "Accept": "application/json, application/rss+xml, application/xml, text/xml, text/html",
 }
 
 
@@ -64,23 +65,32 @@ SOURCES = (
     ("Jobicy", "jobicy_json", "https://jobicy.com/api/v2/remote-jobs?count=200"),
     ("RemoteJobs.org", "remotejobs_json", "https://remotejobs.org/api/v1/jobs?category=programming&limit=50"),
     ("We Work Remotely", "rss", "https://weworkremotely.com/categories/remote-programming-jobs.rss"),
+
+    # Direct job-board discovery: Google News is only a fallback.
+    ("Bayt Direct Android", "bayt_html", "https://www.bayt.com/en/egypt/jobs/android-developer-jobs/"),
+    ("Bayt Direct Kotlin", "bayt_html", "https://www.bayt.com/en/egypt/jobs/android-kotlin-developer-jobs/"),
+    ("Bayt Direct Intern", "bayt_html", "https://www.bayt.com/en/egypt/jobs/android-developer-intern-jobs/"),
+
     ("Bayt Android via Google News", "rss", google_news_url(
-        'site:bayt.com/en/egypt/jobs/ "Android Developer"'
+        'site:bayt.com/en/egypt/jobs/ "Junior Android Developer"'
     )),
     ("Bayt Kotlin via Google News", "rss", google_news_url(
-        'site:bayt.com/en/egypt/jobs/ Kotlin Android'
+        'site:bayt.com/en/egypt/jobs/ "Android Engineer" Kotlin Egypt'
     )),
     ("WUZZUF Android via Google News", "rss", google_news_url(
-        'site:wuzzuf.net/jobs/ "Android Developer" Egypt'
+        'site:wuzzuf.net/jobs/ "Junior Android Developer" Egypt'
     )),
     ("WUZZUF Kotlin via Google News", "rss", google_news_url(
-        'site:wuzzuf.net/jobs/ Kotlin Android Egypt'
+        'site:wuzzuf.net/jobs/ "Android Developer" Kotlin Egypt'
     )),
     ("LinkedIn Android via Google News", "rss", google_news_url(
-        'site:linkedin.com/jobs/view/ "Android Developer" Egypt'
+        'site:linkedin.com/jobs/view/ "Junior Android Developer" Egypt'
+    )),
+    ("LinkedIn Kotlin via Google News", "rss", google_news_url(
+        'site:linkedin.com/jobs/view/ "Android Developer" Kotlin Egypt'
     )),
     ("Indeed Android via Google News", "rss", google_news_url(
-        'site:indeed.com/viewjob Android Developer Egypt'
+        'site:indeed.com/viewjob "Android Developer" Egypt'
     )),
 )
 
@@ -213,12 +223,99 @@ def rss_jobs(content, source):
     return jobs
 
 
+def parse_relative_age(value, now=None):
+    text = normalize_text(value)
+    now = now or datetime.now(timezone.utc)
+
+    if text in {"just now", "today"}:
+        return now
+    if text == "yesterday":
+        return now - timedelta(days=1)
+
+    match = re.search(
+        r"(\\d+)\\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months)\\s+ago",
+        text,
+    )
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+        if unit.startswith("minute"):
+            return now - timedelta(minutes=amount)
+        if unit.startswith("hour"):
+            return now - timedelta(hours=amount)
+        if unit.startswith("day"):
+            return now - timedelta(days=amount)
+        if unit.startswith("week"):
+            return now - timedelta(weeks=amount)
+        return now - timedelta(days=30 * amount)
+
+    if "30+ days ago" in text:
+        return now - timedelta(days=31)
+
+    return None
+
+
+def bayt_html_jobs(content, source):
+    soup = BeautifulSoup(content, "html.parser")
+    jobs = []
+    seen_links = set()
+    job_href = re.compile(r"^/en/egypt/jobs/[^/?]+-\\d+/?$")
+
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href", "").strip()
+        if not job_href.match(href):
+            continue
+
+        link = urljoin("https://www.bayt.com", href)
+        if link in seen_links:
+            continue
+
+        title = anchor.get_text(" ", strip=True)
+        if not title:
+            continue
+
+        container = anchor
+        card_text = ""
+        for _ in range(7):
+            container = container.parent
+            if not container:
+                break
+            text = container.get_text(" ", strip=True)
+            if "Summary:" in text and re.search(
+                r"(just now|today|yesterday|\\d+\\s+(?:minutes?|hours?|days?|weeks?|months?)\\s+ago|30\\+\\s+days?\\s+ago)",
+                text,
+                re.I,
+            ):
+                if 100 <= len(text) <= 2200:
+                    card_text = text
+                    break
+
+        if not card_text:
+            card_text = anchor.parent.get_text(" ", strip=True) if anchor.parent else title
+
+        published = parse_relative_age(card_text)
+        jobs.append(normalize_job(
+            source,
+            title,
+            card_text,
+            link,
+            published,
+            title,
+            "Egypt",
+        ))
+        seen_links.add(link)
+
+    return jobs
+
+
 def fetch_source(source, kind, url):
     response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
 
     if kind == "rss":
         return rss_jobs(response.content, source)
+    if kind == "bayt_html":
+        return bayt_html_jobs(response.content, source)
 
     data = response.json()
     if kind == "remoteok_json":
