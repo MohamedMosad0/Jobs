@@ -249,7 +249,7 @@ def fetch_source(source, kind, url):
     raise ValueError(f"Unsupported source type: {kind}")
 
 
-def is_relevant(job):
+def relevance_reason(job):
     title = normalize_text(job["title"])
     description = job["description"]
     text = f"{title} {description}"
@@ -259,28 +259,33 @@ def is_relevant(job):
     title_match = any(term in title for term in ANDROID_TITLE_TERMS)
     stack_hits = sum(term in description for term in ANDROID_STACK_TERMS)
 
-    # Avoid unrelated jobs that merely mention Android once in their description.
     if not title_match and stack_hits < 2:
-        return False
+        return "android_match"
 
     if any(term in f"{title} {level}" for term in SENIOR_TERMS):
-        return False
+        return "seniority"
 
-    # Reject roles that explicitly require 4+ years of experience.
     if re.search(r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*\+?\s*(?:years?|yrs?)\b", text):
-        return False
+        return "experience"
     if re.search(r"\b(?:minimum|min\.?|at least)\s+(?:4|5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b", text):
-        return False
+        return "experience"
     if re.search(r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*[-–]\s*(?:5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b", text):
-        return False
+        return "experience"
 
     if any(term in f"{location} {text}" for term in BLOCKED_LOCATION_TERMS):
-        return False
+        return "blocked_location"
 
     if location and not any(term in location for term in OPEN_LOCATION_TERMS):
-        return False
+        return "location"
 
-    return any(term in text for term in JUNIOR_TERMS) or title_match
+    if not any(term in text for term in JUNIOR_TERMS) and not title_match:
+        return "seniority_signal"
+
+    return None
+
+
+def is_relevant(job):
+    return relevance_reason(job) is None
 
 
 def build_message(job):
@@ -391,15 +396,29 @@ def fetch_new_jobs(seen):
         try:
             jobs = fetch_source(source, kind, url)
             accepted = 0
+            skipped_seen = skipped_old = skipped_no_link = 0
+            reasons = {}
+
+            print(f"{source}: {len(jobs)} raw job(s).")
+            for sample in jobs[:5]:
+                print(f"  sample: {sample['title']!r} | location={sample['location']!r}")
 
             for job in jobs:
                 job_id = make_id(source, "", job["title"], job["link"])
                 if job_id in seen or job_id in discovered_ids:
+                    skipped_seen += 1
                     continue
 
                 if job["published"] and job["published"] < cutoff:
+                    skipped_old += 1
                     continue
-                if not job["link"] or not is_relevant(job):
+                if not job["link"]:
+                    skipped_no_link += 1
+                    continue
+
+                reason = relevance_reason(job)
+                if reason:
+                    reasons[reason] = reasons.get(reason, 0) + 1
                     continue
 
                 discovered_ids.add(job_id)
@@ -409,7 +428,12 @@ def fetch_new_jobs(seen):
                 ))
                 accepted += 1
 
-            print(f"{source}: {accepted} new matching job(s) found.")
+            reason_text = ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())) or "none"
+            print(
+                f"{source}: {accepted} new matching job(s); "
+                f"seen={skipped_seen}, old={skipped_old}, no_link={skipped_no_link}; "
+                f"rejected: {reason_text}"
+            )
         except Exception as exc:
             print(f"Warning: failed to read {source}: {exc}")
 
