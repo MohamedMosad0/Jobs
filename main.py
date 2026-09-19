@@ -303,7 +303,8 @@ def build_message(job):
         f"<b>{title}</b>\n"
         f"🎯 {html.escape(level)}\n"
         f"📰 Source: {source}\n"
-        f"📅 {date_text}\n\n"
+        + ("Powered by RemoteJobs.org\n" if job["source"] == "RemoteJobs.org" else "")
+        + f"📅 {date_text}\n\n"
         f"{html.escape(snippet)}\n\n"
         f'<a href="{link}">🔗 Apply</a>'
     )
