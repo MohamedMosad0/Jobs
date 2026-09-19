@@ -330,24 +330,31 @@ def fetch_new_jobs(seen):
 
 
 def test_telegram():
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID repository secrets.")
+
     response = requests.post(
-        url,
-        json={"chat_id": chat_id, "text": "✅ Android Job Scout Telegram test: connection OK."},
-        timeout=TIMEOUT,
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": "✅ Android Job Scout Telegram test: connection OK.",
+        },
+        timeout=REQUEST_TIMEOUT,
     )
     if not response.ok:
         try:
-            details = response.json().get("description", response.text)
+            details = response.json().get("description", "Unknown Telegram API error")
         except ValueError:
-            details = response.text
+            details = response.text[:300]
         raise RuntimeError(f"Telegram API {response.status_code}: {details}")
+
     print("Telegram test message sent successfully.")
 
-
 def main():
+    if os.getenv("TEST_TELEGRAM", "").strip().lower() == "true":
+        test_telegram()
+        return
+
     seen = load_seen()
     candidates = fetch_new_jobs(seen)
     sent_ids = set()
