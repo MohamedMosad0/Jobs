@@ -11,10 +11,9 @@ import feedparser
 import requests
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 HISTORY_FILE = Path("data/seen_jobs.json")
-MAX_AGE_DAYS = 21
+MAX_AGE_DAYS = 30
 MAX_MESSAGES_PER_RUN = 12
 REQUEST_TIMEOUT = 25
 
@@ -49,6 +48,7 @@ HEADERS = {
     "Accept": "application/json, application/rss+xml, application/xml, text/xml",
 }
 
+
 def google_news_url(query):
     return (
         "https://news.google.com/rss/search?q="
@@ -62,9 +62,6 @@ SOURCES = (
     ("Jobicy", "jobicy_json", "https://jobicy.com/api/v2/remote-jobs?count=200"),
     ("RemoteJobs.org", "remotejobs_json", "https://remotejobs.org/api/v1/jobs?category=programming&limit=50"),
     ("We Work Remotely", "rss", "https://weworkremotely.com/categories/remote-programming-jobs.rss"),
-    # Discovery feeds only: Google News indexes public job pages without us
-    # scraping job boards directly. Keep queries separated so one stale feed
-    # does not hide useful matches from another.
     ("Bayt Android via Google News", "rss", google_news_url(
         'site:bayt.com/en/egypt/jobs/ "Android Developer"'
     )),
@@ -129,8 +126,9 @@ def parse_date(value):
 
 
 def make_id(source, raw_id, title, link):
-    raw = raw_id or link or f"{title}|unknown"
-    return hashlib.sha256(f"{source}|{raw}".encode("utf-8")).hexdigest()
+    # Same apply URL should be one job even when discovered from multiple feeds.
+    raw = link or raw_id or f"{title}|unknown"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def normalize_job(source, title, description, link, published=None, level="", location=""):
@@ -149,17 +147,11 @@ def remoteok_jobs(data):
     jobs = []
     for item in data if isinstance(data, list) else []:
         if isinstance(item, dict) and item.get("position"):
-            jobs.append(
-                normalize_job(
-                    "RemoteOK",
-                    item.get("position"),
-                    f"{item.get('description', '')} {' '.join(item.get('tags') or [])}",
-                    item.get("url"),
-                    item.get("date"),
-                    item.get("position"),
-                    item.get("location"),
-                )
-            )
+            jobs.append(normalize_job(
+                "RemoteOK", item.get("position"),
+                f"{item.get('description', '')} {' '.join(item.get('tags') or [])}",
+                item.get("url"), item.get("date"), item.get("position"), item.get("location"),
+            ))
     return jobs
 
 
@@ -190,17 +182,12 @@ def remotejobs_jobs(data):
     jobs = []
     for item in (data or {}).get("data", []):
         company = (item.get("company") or {}).get("name", "")
-        jobs.append(
-            normalize_job(
-                "RemoteJobs.org",
-                item.get("title"),
-                f"{item.get('description', '')} {company}",
-                item.get("apply_url") or item.get("url"),
-                item.get("posted_at"),
-                item.get("type"),
-                item.get("location"),
-            )
-        )
+        jobs.append(normalize_job(
+            "RemoteJobs.org", item.get("title"),
+            f"{item.get('description', '')} {company}",
+            item.get("apply_url") or item.get("url"),
+            item.get("posted_at"), item.get("type"), item.get("location"),
+        ))
     return jobs
 
 
@@ -216,17 +203,11 @@ def rss_jobs(content, source):
         if parsed:
             published = datetime(*parsed[:6], tzinfo=timezone.utc)
 
-        jobs.append(
-            normalize_job(
-                source,
-                entry.get("title"),
-                entry.get("summary") or entry.get("description"),
-                entry.get("link"),
-                published,
-                entry.get("title"),
-                "",
-            )
-        )
+        summary = entry.get("summary") or entry.get("description") or ""
+        jobs.append(normalize_job(
+            source, entry.get("title"), summary, entry.get("link"),
+            published, entry.get("title"), "",
+        ))
     return jobs
 
 
@@ -249,6 +230,23 @@ def fetch_source(source, kind, url):
     raise ValueError(f"Unsupported source type: {kind}")
 
 
+def has_android_match(title, description):
+    title_match = any(term in title for term in ANDROID_TITLE_TERMS)
+    stack_hits = sum(term in description for term in ANDROID_STACK_TERMS)
+    return title_match, stack_hits
+
+
+def has_experience_over_limit(text):
+    # Reject explicit requirements above the user's junior/entry target.
+    patterns = (
+        r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*\+\s*(?:years?|yrs?)\b",
+        r"\b(?:minimum|min\.?|at least)\s+(?:4|5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b",
+        r"\b(?:more than|over)\s+(?:4|5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b",
+        r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*[-–]\s*(?:5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
 def relevance_reason(job):
     title = normalize_text(job["title"])
     description = job["description"]
@@ -256,8 +254,7 @@ def relevance_reason(job):
     level = job["level"]
     location = job["location"]
 
-    title_match = any(term in title for term in ANDROID_TITLE_TERMS)
-    stack_hits = sum(term in description for term in ANDROID_STACK_TERMS)
+    title_match, stack_hits = has_android_match(title, description)
 
     if not title_match and stack_hits < 2:
         return "android_match"
@@ -265,11 +262,7 @@ def relevance_reason(job):
     if any(term in f"{title} {level}" for term in SENIOR_TERMS):
         return "seniority"
 
-    if re.search(r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*\+?\s*(?:years?|yrs?)\b", text):
-        return "experience"
-    if re.search(r"\b(?:minimum|min\.?|at least)\s+(?:4|5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b", text):
-        return "experience"
-    if re.search(r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*[-–]\s*(?:5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b", text):
+    if has_experience_over_limit(text):
         return "experience"
 
     if any(term in f"{location} {text}" for term in BLOCKED_LOCATION_TERMS):
@@ -284,17 +277,14 @@ def relevance_reason(job):
     return None
 
 
-def is_relevant(job):
-    return relevance_reason(job) is None
-
-
 def build_message(job):
     title = html.escape(job["title"])
     source = html.escape(job["source"])
     link = html.escape(job["link"], quote=True)
+    text = f"{job['title']} {job['description']}"
     level = (
         "Junior / Entry / Internship"
-        if any(term in f"{job['title'].lower()} {job['description']}" for term in JUNIOR_TERMS)
+        if any(term in text.lower() for term in JUNIOR_TERMS)
         else "Android role"
     )
     date_text = job["published"].strftime("%Y-%m-%d") if job["published"] else "recent"
@@ -304,13 +294,22 @@ def build_message(job):
         snippet += "…"
 
     return (
-        "🚀 <b>New Android Job</b>\n"
-        f"<b>{title}</b>\n"
-        f"🎯 {html.escape(level)}\n"
-        f"📰 Source: {source}\n"
-        + ("Powered by RemoteJobs.org\n" if job["source"] == "RemoteJobs.org" else "")
-        + f"📅 {date_text}\n\n"
-        f"{html.escape(snippet)}\n\n"
+        "🚀 <b>New Android Job</b>
+"
+        f"<b>{title}</b>
+"
+        f"🎯 {html.escape(level)}
+"
+        f"📰 Source: {source}
+"
+        + ("Powered by RemoteJobs.org
+" if job["source"] == "RemoteJobs.org" else "")
+        + f"📅 {date_text}
+
+"
+        f"{html.escape(snippet)}
+
+"
         f'<a href="{link}">🔗 Apply</a>'
     )
 
@@ -353,9 +352,7 @@ def discover_chat_id():
         )
         chat = (message or {}).get("chat") or {}
         chat_id = chat.get("id")
-        chat_type = chat.get("type")
-
-        if chat_id is not None and chat_type == "private":
+        if chat_id is not None and chat.get("type") == "private":
             candidates.append((update.get("update_id", 0), chat_id))
 
     print(f"Telegram updates received: {len(updates)}")
@@ -370,21 +367,13 @@ def discover_chat_id():
     return str(max(candidates)[1])
 
 
-def get_chat_id():
-    return discover_chat_id()
-
-
 def send_telegram(message):
-    chat_id = get_chat_id()
-    telegram_request(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False,
-        },
-    )
+    telegram_request("sendMessage", {
+        "chat_id": discover_chat_id(),
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False,
+    })
 
 
 def fetch_new_jobs(seen):
@@ -408,7 +397,6 @@ def fetch_new_jobs(seen):
                 if job_id in seen or job_id in discovered_ids:
                     skipped_seen += 1
                     continue
-
                 if job["published"] and job["published"] < cutoff:
                     skipped_old += 1
                     continue
@@ -443,15 +431,13 @@ def fetch_new_jobs(seen):
 
 def test_telegram():
     chat_id = discover_chat_id()
-    telegram_request(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": "✅ Android Job Scout Telegram test: connection OK.",
-        },
-    )
+    telegram_request("sendMessage", {
+        "chat_id": chat_id,
+        "text": "✅ Android Job Scout Telegram test: connection OK.",
+    })
     print("Telegram test message sent successfully.")
     print(f"Discovered private chat ID: {chat_id}")
+
 
 def main():
     if os.getenv("TEST_TELEGRAM", "").strip().lower() == "true":
