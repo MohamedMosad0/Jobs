@@ -315,10 +315,7 @@ def discover_chat_id():
     return str(max(candidates)[1])
 
 
-def get_chat_id(auto_discover=False):
-    if TELEGRAM_CHAT_ID and not auto_discover:
-        return TELEGRAM_CHAT_ID
-
+def get_chat_id():
     return discover_chat_id()
 
 
