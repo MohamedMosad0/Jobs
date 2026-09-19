@@ -329,6 +329,24 @@ def fetch_new_jobs(seen):
     return candidates[:MAX_MESSAGES_PER_RUN]
 
 
+def test_telegram():
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    response = requests.post(
+        url,
+        json={"chat_id": chat_id, "text": "✅ Android Job Scout Telegram test: connection OK."},
+        timeout=TIMEOUT,
+    )
+    if not response.ok:
+        try:
+            details = response.json().get("description", response.text)
+        except ValueError:
+            details = response.text
+        raise RuntimeError(f"Telegram API {response.status_code}: {details}")
+    print("Telegram test message sent successfully.")
+
+
 def main():
     seen = load_seen()
     candidates = fetch_new_jobs(seen)
