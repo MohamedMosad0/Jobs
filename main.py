@@ -14,6 +14,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 HISTORY_FILE = Path("data/seen_jobs.json")
 MAX_AGE_DAYS = 30
+GOOGLE_NEWS_MAX_AGE_DAYS = 60
 MAX_MESSAGES_PER_RUN = 12
 REQUEST_TIMEOUT = 25
 
@@ -52,7 +53,8 @@ HEADERS = {
 def google_news_url(query):
     return (
         "https://news.google.com/rss/search?q="
-        f"{quote_plus(query)}&hl=en-EG&gl=EG&ceid=EG:en"
+        f"{quote_plus(query + ' when:' + str(GOOGLE_NEWS_MAX_AGE_DAYS) + 'd')}"
+        "&hl=en-EG&gl=EG&ceid=EG:en"
     )
 
 
@@ -369,6 +371,7 @@ def send_telegram(message):
 
 def fetch_new_jobs(seen):
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
+    google_news_cutoff = datetime.now(timezone.utc) - timedelta(days=GOOGLE_NEWS_MAX_AGE_DAYS)
     candidates = []
     discovered_ids = set()
 
@@ -381,14 +384,20 @@ def fetch_new_jobs(seen):
 
             print(f"{source}: {len(jobs)} raw job(s).")
             for sample in jobs[:5]:
-                print(f"  sample: {sample['title']!r} | location={sample['location']!r}")
+                published = sample["published"].strftime("%Y-%m-%d") if sample["published"] else "unknown"
+                print(f"  sample: {sample['title']!r} | published={published} | location={sample['location']!r}")
 
             for job in jobs:
                 job_id = make_id(source, "", job["title"], job["link"])
                 if job_id in seen or job_id in discovered_ids:
                     skipped_seen += 1
                     continue
-                if job["published"] and job["published"] < cutoff:
+                job_cutoff = (
+                    google_news_cutoff
+                    if "via Google News" in source
+                    else cutoff
+                )
+                if job["published"] and job["published"] < job_cutoff:
                     skipped_old += 1
                     continue
                 if not job["link"]:
