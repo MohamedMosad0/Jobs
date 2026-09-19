@@ -294,22 +294,13 @@ def build_message(job):
         snippet += "…"
 
     return (
-        "🚀 <b>New Android Job</b>
-"
-        f"<b>{title}</b>
-"
-        f"🎯 {html.escape(level)}
-"
-        f"📰 Source: {source}
-"
-        + ("Powered by RemoteJobs.org
-" if job["source"] == "RemoteJobs.org" else "")
-        + f"📅 {date_text}
-
-"
-        f"{html.escape(snippet)}
-
-"
+        "🚀 <b>New Android Job</b>\n"
+        f"<b>{title}</b>\n"
+        f"🎯 {html.escape(level)}\n"
+        f"📰 Source: {source}\n"
+        + ("Powered by RemoteJobs.org\n" if job["source"] == "RemoteJobs.org" else "")
+        + f"📅 {date_text}\n\n"
+        f"{html.escape(snippet)}\n\n"
         f'<a href="{link}">🔗 Apply</a>'
     )
 
