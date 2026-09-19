@@ -49,3 +49,10 @@ RemoteOK documents public JSON/RSS feeds and asks aggregators to credit RemoteOK
 Remotive documents public API/RSS access and asks applications to link back to the Remotive job URL and attribute Remotive.
 
 Jobicy provides a public JSON endpoint without an API key and asks integrations to keep Jobicy attribution and canonical listing URLs.
+
+
+## Egypt discovery feeds
+
+The scout also checks Google News RSS queries that index public job pages from Bayt, WUZZUF, and LinkedIn. These are used as discovery feeds rather than scraping those job sites directly. The original listing remains the source to verify before applying.
+
+This matters because Bayt currently shows a substantial Egypt Android-job result set, including junior listings, while WUZZUF maintains a large Egypt job index. The discovery layer is intentionally separate from the direct APIs/feeds so a blocked or unavailable source does not stop the scout.
