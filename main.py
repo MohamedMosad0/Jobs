@@ -271,27 +271,68 @@ def build_message(job):
     )
 
 
-def send_telegram(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID repository secrets.")
+def telegram_request(method, payload=None):
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN repository secret.")
 
     response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={
-            "chat_id": TELEGRAM_CHAT_ID,
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}",
+        json=payload or {},
+        timeout=REQUEST_TIMEOUT,
+    )
+    try:
+        data = response.json()
+    except ValueError:
+        data = {"ok": False, "description": response.text[:300]}
+
+    if not response.ok or not data.get("ok"):
+        raise RuntimeError(
+            f"Telegram API {response.status_code}: "
+            f"{data.get('description', 'Unknown Telegram API error')}"
+        )
+    return data["result"]
+
+
+def discover_chat_id():
+    updates = telegram_request("getUpdates", {"limit": 20, "timeout": 0})
+    candidates = []
+
+    for update in updates:
+        message = update.get("message") or update.get("channel_post")
+        chat = (message or {}).get("chat") or {}
+        chat_id = chat.get("id")
+        chat_type = chat.get("type")
+
+        if chat_id is not None and chat_type == "private":
+            candidates.append((update.get("update_id", 0), chat_id))
+
+    if not candidates:
+        raise RuntimeError(
+            "Could not discover a private chat. Open the bot in Telegram and send /start, "
+            "then run the Telegram test again."
+        )
+
+    return str(max(candidates)[1])
+
+
+def get_chat_id(auto_discover=False):
+    if TELEGRAM_CHAT_ID and not auto_discover:
+        return TELEGRAM_CHAT_ID
+
+    return discover_chat_id()
+
+
+def send_telegram(message):
+    chat_id = get_chat_id()
+    telegram_request(
+        "sendMessage",
+        {
+            "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML",
             "disable_web_page_preview": False,
         },
-        timeout=REQUEST_TIMEOUT,
     )
-
-    if not response.ok:
-        try:
-            detail = response.json().get("description", "Unknown Telegram API error")
-        except ValueError:
-            detail = response.text[:300]
-        raise RuntimeError(f"Telegram API {response.status_code}: {detail}")
 
 
 def fetch_new_jobs(seen):
@@ -330,25 +371,16 @@ def fetch_new_jobs(seen):
 
 
 def test_telegram():
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID repository secrets.")
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={
-            "chat_id": TELEGRAM_CHAT_ID,
+    chat_id = discover_chat_id()
+    telegram_request(
+        "sendMessage",
+        {
+            "chat_id": chat_id,
             "text": "✅ Android Job Scout Telegram test: connection OK.",
         },
-        timeout=REQUEST_TIMEOUT,
     )
-    if not response.ok:
-        try:
-            details = response.json().get("description", "Unknown Telegram API error")
-        except ValueError:
-            details = response.text[:300]
-        raise RuntimeError(f"Telegram API {response.status_code}: {details}")
-
     print("Telegram test message sent successfully.")
+    print(f"Discovered private chat ID: {chat_id}")
 
 def main():
     if os.getenv("TEST_TELEGRAM", "").strip().lower() == "true":
