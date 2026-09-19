@@ -3,6 +3,7 @@ import html
 import json
 import os
 import re
+from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -48,11 +49,30 @@ HEADERS = {
     "Accept": "application/json, application/rss+xml, application/xml, text/xml",
 }
 
+def google_news_url(query):
+    return (
+        "https://news.google.com/rss/search?q="
+        f"{quote_plus(query)}&hl=en-EG&gl=EG&ceid=EG:en"
+    )
+
+
 SOURCES = (
     ("RemoteOK", "remoteok_json", "https://remoteok.com/api"),
     ("Remotive", "remotive_json", "https://remotive.com/api/remote-jobs"),
     ("Jobicy", "jobicy_json", "https://jobicy.com/api/v2/remote-jobs?count=200"),
     ("We Work Remotely", "rss", "https://weworkremotely.com/categories/remote-programming-jobs.rss"),
+    # Discovery feeds only: Google News indexes public job pages without us
+    # scraping Bayt/WUZZUF directly. The Telegram message links to the indexed
+    # result, which can lead to the original posting.
+    ("Bayt via Google News", "rss", google_news_url(
+        'site:bayt.com/en/egypt/jobs/ ("Android Developer" OR "Android Engineer" OR Kotlin)'
+    )),
+    ("WUZZUF via Google News", "rss", google_news_url(
+        'site:wuzzuf.net/jobs/ ("Android Developer" OR "Android Engineer" OR Kotlin)'
+    )),
+    ("LinkedIn via Google News", "rss", google_news_url(
+        'site:linkedin.com/jobs/view/ ("Android Developer" OR "Android Engineer" OR Kotlin) Egypt'
+    )),
 )
 
 
