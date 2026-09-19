@@ -254,59 +254,6 @@ def parse_relative_age(value, now=None):
     return None
 
 
-def bayt_html_jobs(content, source):
-    soup = BeautifulSoup(content, "html.parser")
-    jobs = []
-    seen_links = set()
-    job_href = re.compile(r"^/en/egypt/jobs/[^/?]+-\d+/?$")
-
-    for anchor in soup.find_all("a", href=True):
-        href = anchor.get("href", "").strip()
-        if not job_href.match(href):
-            continue
-
-        link = urljoin("https://www.bayt.com", href)
-        if link in seen_links:
-            continue
-
-        title = anchor.get_text(" ", strip=True)
-        if not title:
-            continue
-
-        container = anchor
-        card_text = ""
-        for _ in range(7):
-            container = container.parent
-            if not container:
-                break
-            text = container.get_text(" ", strip=True)
-            if "Summary:" in text and re.search(
-                r"(just now|today|yesterday|\\d+\\s+(?:minutes?|hours?|days?|weeks?|months?)\\s+ago|30\\+\\s+days?\\s+ago)",
-                text,
-                re.I,
-            ):
-                if 100 <= len(text) <= 2200:
-                    card_text = text
-                    break
-
-        if not card_text:
-            card_text = anchor.parent.get_text(" ", strip=True) if anchor.parent else title
-
-        published = parse_relative_age(card_text)
-        jobs.append(normalize_job(
-            source,
-            title,
-            card_text,
-            link,
-            published,
-            title,
-            "Egypt",
-        ))
-        seen_links.add(link)
-
-    return jobs
-
-
 def wuzzuf_html_jobs(content, source):
     soup = BeautifulSoup(content, "html.parser")
     jobs = []
@@ -364,8 +311,6 @@ def fetch_source(source, kind, url):
 
     if kind == "rss":
         return rss_jobs(response.content, source)
-    if kind == "bayt_html":
-        return bayt_html_jobs(response.content, source)
     if kind == "wuzzuf_html":
         return wuzzuf_html_jobs(response.content, source)
 
