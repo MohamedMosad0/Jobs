@@ -294,11 +294,19 @@ def telegram_request(method, payload=None):
 
 
 def discover_chat_id():
-    updates = telegram_request("getUpdates", {"limit": 20, "timeout": 0})
+    bot = telegram_request("getMe")
+    updates = telegram_request("getUpdates", {"limit": 100, "timeout": 0})
     candidates = []
 
+    print(f"Telegram bot detected: @{bot.get('username', 'unknown')}")
+
     for update in updates:
-        message = update.get("message") or update.get("channel_post")
+        message = (
+            update.get("message")
+            or update.get("edited_message")
+            or update.get("my_chat_member")
+            or update.get("chat_member")
+        )
         chat = (message or {}).get("chat") or {}
         chat_id = chat.get("id")
         chat_type = chat.get("type")
@@ -306,10 +314,13 @@ def discover_chat_id():
         if chat_id is not None and chat_type == "private":
             candidates.append((update.get("update_id", 0), chat_id))
 
+    print(f"Telegram updates received: {len(updates)}")
+    print(f"Private chat candidates: {len(candidates)}")
+
     if not candidates:
         raise RuntimeError(
-            "Could not discover a private chat. Open the bot in Telegram and send /start, "
-            "then run the Telegram test again."
+            "No private chat update found. Make sure you opened THIS bot shown above "
+            "and pressed Start/sent /start, then run the test again."
         )
 
     return str(max(candidates)[1])
