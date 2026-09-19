@@ -66,9 +66,13 @@ SOURCES = (
     ("RemoteJobs.org", "remotejobs_json", "https://remotejobs.org/api/v1/jobs?category=programming&limit=50"),
     ("We Work Remotely", "rss", "https://weworkremotely.com/categories/remote-programming-jobs.rss"),
 
-    # Direct job-board discovery where the public board is crawlable from CI.
-    ("WUZZUF Direct Android", "wuzzuf_html", "https://wuzzuf.net/a/Android-Mobile-Development-Jobs-in-Egypt"),
-    ("WUZZUF Direct Android Page 2", "wuzzuf_html", "https://wuzzuf.net/a/Android-Mobile-Development-Jobs-in-Egypt?page=2"),
+    # Broad indexed discovery complements board-specific feeds.
+    ("Egypt Android Jobs via Google News", "rss", google_news_url(
+        '"Android Developer" Egypt jobs'
+    )),
+    ("Egypt Kotlin Android Jobs via Google News", "rss", google_news_url(
+        'Kotlin Android Egypt jobs'
+    )),
 
     ("Bayt Android via Google News", "rss", google_news_url(
         'site:bayt.com/en/egypt/jobs/ "Junior Android Developer"'
@@ -254,66 +258,12 @@ def parse_relative_age(value, now=None):
     return None
 
 
-def wuzzuf_html_jobs(content, source):
-    soup = BeautifulSoup(content, "html.parser")
-    jobs = []
-    seen_links = set()
-    job_href = re.compile(r"^/jobs/p/[^?#]+$")
-
-    for anchor in soup.find_all("a", href=True):
-        href = anchor.get("href", "").strip()
-        if not job_href.match(href):
-            continue
-
-        link = urljoin("https://wuzzuf.net", href)
-        if link in seen_links:
-            continue
-
-        title = anchor.get_text(" ", strip=True)
-        if not title:
-            continue
-
-        container = anchor
-        card_text = ""
-        for _ in range(5):
-            container = container.parent
-            if not container:
-                break
-            text = container.get_text(" ", strip=True)
-            if re.search(
-                r"(just now|today|yesterday|\d+\s+(?:minutes?|hours?|days?|weeks?|months?)\s+ago|1\s+month\s+ago)",
-                text,
-                re.I,
-            ) and 20 <= len(text) <= 900:
-                card_text = text
-                break
-
-        if not card_text:
-            card_text = title
-
-        jobs.append(normalize_job(
-            source,
-            title,
-            card_text,
-            link,
-            parse_relative_age(card_text),
-            title,
-            "Egypt",
-        ))
-        seen_links.add(link)
-
-    return jobs
-
-
 def fetch_source(source, kind, url):
     response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
 
     if kind == "rss":
         return rss_jobs(response.content, source)
-    if kind == "wuzzuf_html":
-        return wuzzuf_html_jobs(response.content, source)
-
     data = response.json()
     if kind == "remoteok_json":
         return remoteok_jobs(data)
