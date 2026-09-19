@@ -259,7 +259,7 @@ def bayt_html_jobs(content, source):
     soup = BeautifulSoup(content, "html.parser")
     jobs = []
     seen_links = set()
-    job_href = re.compile(r"^/en/egypt/jobs/[^/?]+-\\d+/?$")
+    job_href = re.compile(r"^/en/egypt/jobs/[^/?]+-\d+/?$")
 
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href", "").strip()
