@@ -44,7 +44,6 @@ jobs:
       - name: Run scout
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TEST_TELEGRAM: ${{ inputs.test_telegram || false }}
         run: python main.py
 
