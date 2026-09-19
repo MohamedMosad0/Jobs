@@ -19,8 +19,8 @@ MAX_MESSAGES_PER_RUN = 12
 REQUEST_TIMEOUT = 25
 
 ANDROID_TITLE_TERMS = (
-    "android", "kotlin", "android developer", "android engineer",
-    "android sdk", "jetpack compose",
+    "android", "android developer", "android engineer",
+    "android sdk", "jetpack compose", "android mobile",
 )
 ANDROID_STACK_TERMS = (
     "android", "kotlin", "android sdk", "jetpack", "compose",
@@ -32,8 +32,8 @@ JUNIOR_TERMS = (
     "graduate", "fresh graduate", "trainee", "associate",
 )
 SENIOR_TERMS = (
-    "senior", "lead", "principal", "staff", "manager", "director",
-    "head of", "architect",
+    "senior", "sr.", "sr ", "lead", "principal", "staff", "manager",
+    "director", "head of", "architect",
 )
 BLOCKED_LOCATION_TERMS = (
     "usa only", "us only", "united states only", "uk only", "canada only",
@@ -234,6 +234,14 @@ def is_relevant(job):
         return False
 
     if any(term in f"{title} {level}" for term in SENIOR_TERMS):
+        return False
+
+    # Reject roles that explicitly require 4+ years of experience.
+    if re.search(r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*\+?\s*(?:years?|yrs?)\b", text):
+        return False
+    if re.search(r"\b(?:minimum|min\.?|at least)\s+(?:4|5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b", text):
+        return False
+    if re.search(r"\b(?:4|5|6|7|8|9|10|[1-9]\d)\s*[-–]\s*(?:5|6|7|8|9|10|[1-9]\d)\s*(?:years?|yrs?)\b", text):
         return False
 
     if any(term in f"{location} {text}" for term in BLOCKED_LOCATION_TERMS):
