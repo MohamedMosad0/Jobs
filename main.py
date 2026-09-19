@@ -2,6 +2,7 @@ import hashlib
 import html
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,35 +15,77 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 HISTORY_FILE = Path("data/seen_jobs.json")
 MAX_AGE_DAYS = 21
 MAX_MESSAGES_PER_RUN = 12
+REQUEST_TIMEOUT = 25
 
 ANDROID_TERMS = (
-    "android", "kotlin", "android sdk", "jetpack compose",
-    "android developer", "android engineer",
+    "android",
+    "kotlin",
+    "android sdk",
+    "jetpack compose",
+    "android developer",
+    "android engineer",
 )
 JUNIOR_TERMS = (
-    "junior", "entry level", "entry-level", "intern", "internship",
-    "graduate", "fresh graduate", "trainee", "associate",
+    "junior",
+    "entry level",
+    "entry-level",
+    "intern",
+    "internship",
+    "graduate",
+    "fresh graduate",
+    "trainee",
+    "associate",
 )
 SENIOR_TERMS = (
-    "senior", "lead", "principal", "staff", "manager", "director",
-    "head of", "architect",
+    "senior",
+    "lead",
+    "principal",
+    "staff",
+    "manager",
+    "director",
+    "head of",
+    "architect",
 )
 BLOCKED_LOCATION_TERMS = (
-    "usa only", "us only", "united states only", "uk only", "canada only",
-    "australia only", "germany only", "france only",
+    "usa only",
+    "us only",
+    "united states only",
+    "uk only",
+    "canada only",
+    "australia only",
+    "germany only",
+    "france only",
+)
+OPEN_LOCATION_TERMS = (
+    "worldwide",
+    "anywhere",
+    "global",
+    "remote",
+    "egypt",
+    "africa",
+    "middle east",
 )
 
-# Public feeds that explicitly permit feed consumption/redistribution with
-# attribution. We link users back to the original job URL.
-FEEDS = [
-    ("RemoteOK", "https://remoteok.com/remote-android-jobs.rss"),
-    ("We Work Remotely", "https://weworkremotely.com/categories/remote-programming-jobs.rss"),
-    ("Remotive", "https://remotive.com/feed"),
-]
+HEADERS = {
+    "User-Agent": "AndroidJobScout/1.0 (+https://github.com/MohamedMosad0/Jobs)",
+    "Accept": "application/json, application/rss+xml, application/xml, text/xml",
+}
+
+SOURCES = (
+    ("RemoteOK", "remoteok_json", "https://remoteok.com/api"),
+    ("Remotive", "remotive_json", "https://remotive.com/api/remote-jobs"),
+    ("Jobicy", "jobicy_json", "https://jobicy.com/api/v2/remote-jobs?count=200"),
+    (
+        "We Work Remotely",
+        "rss",
+        "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+    ),
+)
 
 
 def normalize_text(value):
-    value = html.unescape(value or "")
+    value = html.unescape(str(value or ""))
+    value = re.sub(r"<[^>]+>", " ", value)
     return " ".join(value.lower().split())
 
 
@@ -61,74 +104,191 @@ def save_seen(seen):
     )
 
 
-def entry_text(entry):
-    title = normalize_text(entry.get("title"))
-    summary = normalize_text(entry.get("summary") or entry.get("description"))
-    return title, summary, f"{title} {summary}"
-
-
-def published_datetime(entry):
-    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
-    if not parsed:
+def parse_date(value):
+    if not value:
         return None
-    return datetime(*parsed[:6], tzinfo=timezone.utc)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    text = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
 
 
-def make_id(source, entry):
-    raw = (
-        entry.get("id")
-        or entry.get("guid")
-        or entry.get("link")
-        or f"{entry.get('title', '')}|{entry.get('published', '')}"
-    )
+def make_id(source, raw_id, title, link):
+    raw = raw_id or link or f"{title}|unknown"
     return hashlib.sha256(f"{source}|{raw}".encode("utf-8")).hexdigest()
 
 
-def is_relevant(entry):
-    title, summary, text = entry_text(entry)
+def normalize_job(source, title, description, link, published=None, level="", location=""):
+    return {
+        "source": source,
+        "title": str(title or "Android opportunity").strip(),
+        "description": normalize_text(description),
+        "link": str(link or "").strip(),
+        "published": parse_date(published),
+        "level": normalize_text(level),
+        "location": normalize_text(location),
+    }
+
+
+def remoteok_jobs(data):
+    jobs = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict) or not item.get("position"):
+            continue
+        tags = " ".join(item.get("tags") or [])
+        jobs.append(
+            normalize_job(
+                "RemoteOK",
+                item.get("position"),
+                f"{item.get('description', '')} {tags}",
+                item.get("url"),
+                item.get("date"),
+                item.get("position"),
+                item.get("location"),
+            )
+        )
+    return jobs
+
+
+def remotive_jobs(data):
+    jobs = []
+    for item in (data or {}).get("jobs", []):
+        jobs.append(
+            normalize_job(
+                "Remotive",
+                item.get("title"),
+                item.get("description"),
+                item.get("url"),
+                item.get("publication_date"),
+                item.get("job_type"),
+                item.get("candidate_required_location"),
+            )
+        )
+    return jobs
+
+
+def jobicy_jobs(data):
+    jobs = []
+    for item in (data or {}).get("jobs", []):
+        jobs.append(
+            normalize_job(
+                "Jobicy",
+                item.get("jobTitle"),
+                item.get("jobDescription") or item.get("jobExcerpt"),
+                item.get("url"),
+                item.get("pubDate"),
+                item.get("jobLevel"),
+                item.get("jobGeo"),
+            )
+        )
+    return jobs
+
+
+def rss_jobs(content, source):
+    feed = feedparser.parse(content)
+    if getattr(feed, "bozo", False):
+        print(f"Warning: RSS parser reported an issue for {source}")
+
+    jobs = []
+    for entry in feed.entries:
+        published = None
+        parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+        if parsed:
+            published = datetime(*parsed[:6], tzinfo=timezone.utc)
+
+        jobs.append(
+            normalize_job(
+                source,
+                entry.get("title"),
+                entry.get("summary") or entry.get("description"),
+                entry.get("link"),
+                published,
+                entry.get("title"),
+                "",
+            )
+        )
+    return jobs
+
+
+def fetch_source(source, kind, url):
+    response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+
+    if kind == "rss":
+        return rss_jobs(response.content, source)
+
+    data = response.json()
+    if kind == "remoteok_json":
+        return remoteok_jobs(data)
+    if kind == "remotive_json":
+        return remotive_jobs(data)
+    if kind == "jobicy_json":
+        return jobicy_jobs(data)
+    raise ValueError(f"Unsupported source type: {kind}")
+
+
+def is_relevant(job):
+    title = normalize_text(job["title"])
+    text = f"{title} {job['description']}"
+    level = job["level"]
+    location = job["location"]
 
     if not any(term in text for term in ANDROID_TERMS):
         return False
 
-    if any(term in title for term in SENIOR_TERMS):
+    # Explicit seniority in the title/structured level is excluded.
+    if any(term in f"{title} {level}" for term in SENIOR_TERMS):
         return False
 
-    if any(term in text for term in BLOCKED_LOCATION_TERMS):
+    if any(term in f"{location} {text}" for term in BLOCKED_LOCATION_TERMS):
         return False
 
-    # Keep junior/intern roles and unspecific Android roles. The latter are
-    # allowed because many companies omit experience level from the title.
+    # If the source exposes a specific eligibility location, keep global/Egypt/
+    # Africa/Middle East/remote-friendly listings and discard clearly local ones.
+    if location and not any(term in location for term in OPEN_LOCATION_TERMS):
+        return False
+
     return any(term in text for term in JUNIOR_TERMS) or "android" in title
 
 
-def clean_url(entry):
-    return (entry.get("link") or "").strip()
+def build_message(job):
+    title = html.escape(job["title"])
+    source = html.escape(job["source"])
+    link = html.escape(job["link"], quote=True)
+    level = (
+        "Junior / Entry / Internship"
+        if any(term in f"{job['title'].lower()} {job['description']}" for term in JUNIOR_TERMS)
+        else "Android role"
+    )
 
-
-def build_message(source, entry):
-    title = entry.get("title", "Android opportunity").strip()
-    link = clean_url(entry)
-    _, summary, _ = entry_text(entry)
-    date = published_datetime(entry)
-
-    level = "Junior / Entry / Internship" if any(
-        term in f"{title.lower()} {summary}" for term in JUNIOR_TERMS
-    ) else "Android role"
-
+    date = job["published"]
     date_text = date.strftime("%Y-%m-%d") if date else "recent"
 
-    snippet = summary[:600]
-    if len(summary) > 600:
+    snippet = job["description"][:600]
+    if len(job["description"]) > 600:
         snippet += "…"
+    snippet = html.escape(snippet)
 
     return (
-        f"🚀 *New Android Job*\n"
-        f"*{title}*\n"
-        f"🎯 {level}\n"
+        "🚀 <b>New Android Job</b>\n"
+        f"<b>{title}</b>\n"
+        f"🎯 {html.escape(level)}\n"
         f"📰 Source: {source}\n"
         f"📅 {date_text}\n\n"
         f"{snippet}\n\n"
-        f"🔗 [Apply]({link})"
+        f'🔗 <a href="{link}">Apply</a>'
     )
 
 
@@ -144,10 +304,10 @@ def send_telegram(message):
         json={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
-            "parse_mode": "Markdown",
+            "parse_mode": "HTML",
             "disable_web_page_preview": False,
         },
-        timeout=20,
+        timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
 
@@ -157,49 +317,52 @@ def fetch_new_jobs(seen):
     candidates = []
     discovered_ids = set()
 
-    for source, feed_url in FEEDS:
+    for source, kind, url in SOURCES:
         try:
-            feed = feedparser.parse(feed_url)
-            if getattr(feed, "bozo", False):
-                print(f"Warning: feed parser reported an issue for {source}")
+            jobs = fetch_source(source, kind, url)
+            accepted = 0
 
-            for entry in feed.entries:
-                job_id = make_id(source, entry)
+            for job in jobs:
+                job_id = make_id(source, "", job["title"], job["link"])
                 if job_id in seen or job_id in discovered_ids:
                     continue
 
-                published = published_datetime(entry)
+                published = job["published"]
                 if published and published < cutoff:
                     continue
 
-                if not is_relevant(entry):
-                    continue
-
-                link = clean_url(entry)
-                if not link:
+                if not job["link"] or not is_relevant(job):
                     continue
 
                 discovered_ids.add(job_id)
-                candidates.append((published or datetime.min.replace(tzinfo=timezone.utc),
-                                   source, entry, job_id))
+                candidates.append(
+                    (
+                        published or datetime.min.replace(tzinfo=timezone.utc),
+                        job,
+                        job_id,
+                    )
+                )
+                accepted += 1
+
+            print(f"{source}: {accepted} new matching job(s) found.")
         except Exception as exc:
             print(f"Warning: failed to read {source}: {exc}")
 
     candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[:MAX_MESSAGES_PER_RUN], discovered_ids
+    return candidates[:MAX_MESSAGES_PER_RUN]
 
 
 def main():
     seen = load_seen()
-    candidates, discovered_ids = fetch_new_jobs(seen)
+    candidates = fetch_new_jobs(seen)
 
     sent_ids = set()
-    for _, source, entry, job_id in candidates:
+    for _, job, job_id in candidates:
         try:
-            send_telegram(build_message(source, entry))
+            send_telegram(build_message(job))
             sent_ids.add(job_id)
         except Exception as exc:
-            print(f"Warning: failed to send '{entry.get('title')}': {exc}")
+            print(f"Warning: failed to send '{job['title']}': {exc}")
 
     save_seen(seen | sent_ids)
     print(f"Sent {len(sent_ids)} new job(s).")
