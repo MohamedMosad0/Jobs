@@ -60,18 +60,28 @@ SOURCES = (
     ("RemoteOK", "remoteok_json", "https://remoteok.com/api"),
     ("Remotive", "remotive_json", "https://remotive.com/api/remote-jobs"),
     ("Jobicy", "jobicy_json", "https://jobicy.com/api/v2/remote-jobs?count=200"),
+    ("RemoteJobs.org", "remotejobs_json", "https://remotejobs.org/api/v1/jobs?category=programming&limit=50"),
     ("We Work Remotely", "rss", "https://weworkremotely.com/categories/remote-programming-jobs.rss"),
     # Discovery feeds only: Google News indexes public job pages without us
-    # scraping Bayt/WUZZUF directly. The Telegram message links to the indexed
-    # result, which can lead to the original posting.
-    ("Bayt via Google News", "rss", google_news_url(
-        'site:bayt.com/en/egypt/jobs/ ("Android Developer" OR "Android Engineer" OR Kotlin)'
+    # scraping job boards directly. Keep queries separated so one stale feed
+    # does not hide useful matches from another.
+    ("Bayt Android via Google News", "rss", google_news_url(
+        'site:bayt.com/en/egypt/jobs/ "Android Developer"'
     )),
-    ("WUZZUF via Google News", "rss", google_news_url(
-        'site:wuzzuf.net/jobs/ ("Android Developer" OR "Android Engineer" OR Kotlin)'
+    ("Bayt Kotlin via Google News", "rss", google_news_url(
+        'site:bayt.com/en/egypt/jobs/ Kotlin Android'
     )),
-    ("LinkedIn via Google News", "rss", google_news_url(
-        'site:linkedin.com/jobs/view/ ("Android Developer" OR "Android Engineer" OR Kotlin) Egypt'
+    ("WUZZUF Android via Google News", "rss", google_news_url(
+        'site:wuzzuf.net/jobs/ "Android Developer" Egypt'
+    )),
+    ("WUZZUF Kotlin via Google News", "rss", google_news_url(
+        'site:wuzzuf.net/jobs/ Kotlin Android Egypt'
+    )),
+    ("LinkedIn Android via Google News", "rss", google_news_url(
+        'site:linkedin.com/jobs/view/ "Android Developer" Egypt'
+    )),
+    ("Indeed Android via Google News", "rss", google_news_url(
+        'site:indeed.com/viewjob Android Developer Egypt'
     )),
 )
 
@@ -176,6 +186,24 @@ def jobicy_jobs(data):
     ]
 
 
+def remotejobs_jobs(data):
+    jobs = []
+    for item in (data or {}).get("data", []):
+        company = (item.get("company") or {}).get("name", "")
+        jobs.append(
+            normalize_job(
+                "RemoteJobs.org",
+                item.get("title"),
+                f"{item.get('description', '')} {company}",
+                item.get("apply_url") or item.get("url"),
+                item.get("posted_at"),
+                item.get("type"),
+                item.get("location"),
+            )
+        )
+    return jobs
+
+
 def rss_jobs(content, source):
     feed = feedparser.parse(content)
     if getattr(feed, "bozo", False):
@@ -216,6 +244,8 @@ def fetch_source(source, kind, url):
         return remotive_jobs(data)
     if kind == "jobicy_json":
         return jobicy_jobs(data)
+    if kind == "remotejobs_json":
+        return remotejobs_jobs(data)
     raise ValueError(f"Unsupported source type: {kind}")
 
 
