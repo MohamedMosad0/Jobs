@@ -1,20 +1,33 @@
 # Android Job Scout
 
-Automated Android job discovery with Telegram notifications via GitHub Actions.
+A lightweight Telegram job scout running on GitHub Actions.
 
-## Secrets
+## What it watches
 
-Add these repository secrets:
+- RemoteOK Android RSS
+- We Work Remotely programming RSS
+- Remotive public RSS
+
+The filter prioritizes Android/Kotlin roles, junior/entry-level/internship signals, and excludes explicit senior/lead roles and obvious country-restricted listings.
+
+## Duplicate protection
+
+Sent jobs are stored in `data/seen_jobs.json`. The GitHub Actions workflow commits this history back to the repository after each successful run.
+
+## Telegram secrets
+
+In **Settings → Secrets and variables → Actions**, add:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-## Schedule
+Do not put either value in source code.
 
-Runs twice daily and can also be started manually from GitHub Actions.
+## Run
 
-## Current source
+The workflow runs twice daily and also supports **Run workflow** for manual testing.
 
-- RemoteOK Android RSS
+## Notes
 
-The repository is structured so additional sources and stronger Egypt/remote filtering can be added without changing the Telegram/Actions setup.
+Feeds are used according to their public feed guidance, with attribution and direct links back to the original job listing. The feeds are a discovery layer; they do not guarantee that every listing is eligible for Egypt. Country-restricted listings that are explicit in the feed are filtered out.
+
